@@ -1401,3 +1401,165 @@ button {
   .detail-player-container { height: 220px; }
   .meta-info { flex-direction: column; gap: 6px; }
 }
+
+/* ── List View Override ────────────────────────────────────── */
+.lib-grid--list {
+  grid-template-columns: 1fr;
+  gap: 0.6rem;
+}
+
+.lib-grid--list .lib-card {
+  flex-direction: row;
+  height: 100px;
+  align-items: center;
+}
+
+.lib-grid--list .lib-card__poster {
+  width: 140px;
+  height: 100px;
+  flex-shrink: 0;
+  aspect-ratio: unset;
+}
+
+.lib-grid--list .lib-card__body {
+  padding: 0.6rem 1rem;
+  justify-content: center;
+}
+
+.lib-grid--list .lib-card__title {
+  white-space: normal;
+  font-size: 0.95rem;
+}
+
+.lib-grid--list .lib-card__overlay {
+  display: none;
+}
+
+/* ── Skeleton Loading Cards ─────────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+.skeleton-box,
+.skeleton-line {
+  background: linear-gradient(90deg, #27272f 25%, #32323c 50%, #27272f 75%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s infinite linear;
+  border-radius: 4px;
+}
+
+.skeleton-card .lib-card__poster.skeleton-box {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+}
+
+.skeleton-line {
+  height: 12px;
+  margin-bottom: 8px;
+}
+
+.skeleton-line--title {
+  width: 80%;
+  height: 14px;
+}
+
+.skeleton-line--meta {
+  width: 60%;
+}
+
+.skeleton-line--badge {
+  width: 40%;
+  height: 10px;
+}
+
+/* ── Login Modal ────────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  backdrop-filter: blur(4px);
+}
+
+.modal-box {
+  width: 100%;
+  max-width: 380px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.modal-close {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--bg-surface-2);
+  border: 1px solid var(--accent-border);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--transition), border-color var(--transition);
+}
+
+.modal-close:hover { color: var(--accent); border-color: var(--accent); }
+
+.modal-title {
+  font-size: 1.6rem;
+  color: #ff4a4a;
+  letter-spacing: 3px;
+  text-align: center;
+  margin: 0;
+}
+
+.modal-subtitle {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  text-align: center;
+  margin: 0;
+}
+
+.modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.modal-input {
+  width: 100%;
+  padding: 0.65rem 1rem;
+  background: var(--bg-surface-2);
+  border: 1px solid rgba(232, 69, 60, 0.3);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font);
+  font-size: 0.88rem;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+
+.modal-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(232, 69, 60, 0.15);
+}
+
+.modal-submit { width: 100%; font-size: 1rem; letter-spacing: 1px; margin-top: 4px; }
+
+.modal-status {
+  font-size: 0.78rem;
+  text-align: center;
+  min-height: 18px;
+  color: var(--accent);
+  margin: 0;
+}

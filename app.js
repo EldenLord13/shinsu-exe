@@ -8,6 +8,74 @@
 let currentAnimeData  = [];
 let favoriteAnime     = JSON.parse(localStorage.getItem('anime_favorites')) || [];
 let currentOpenAnime  = null; // tracks the anime currently shown in the detail view
+let currentLang       = localStorage.getItem('anime_lang') || 'en';
+let sidebarAnimeData  = [];
+
+/**
+ * Returns a debounced version of fn that delays execution by `wait` ms.
+ * Cancels any pending call if invoked again before the delay expires.
+ */
+function debounce(fn, wait) {
+  var timer;
+  return function() {
+    var ctx  = this;
+    var args = arguments;
+    clearTimeout(timer);
+    timer = setTimeout(function() { fn.apply(ctx, args); }, wait);
+  };
+}
+
+/**
+ * Fetches a URL and retries up to `retries` times on 429 (rate limited)
+ * or network errors, waiting `delay` ms between attempts.
+ */
+async function fetchWithRetry(url, retries, delay) {
+  retries = retries || 3;
+  delay   = delay   || 500;
+  for (var attempt = 0; attempt < retries; attempt++) {
+    try {
+      var res = await fetch(url);
+      if (res.status === 429) {
+        // Rate limited — wait then retry
+        await new Promise(function(resolve) { setTimeout(resolve, delay * (attempt + 1)); });
+        continue;
+      }
+      return res;
+    } catch (err) {
+      if (attempt === retries - 1) throw err;
+      await new Promise(function(resolve) { setTimeout(resolve, delay); });
+    }
+  }
+  throw new Error('Max retries exceeded for: ' + url);
+}
+
+/**
+ * Returns the best available title for the current language.
+ * In Russian mode, searches anime.titles[] for a Russian entry or any
+ * string containing Cyrillic characters. Falls back to anime.title.
+ * @param {Object} anime - One Jikan data item
+ * @returns {string} The localised display title
+ */
+function getLocalizedTitle(anime) {
+  if (currentLang === 'ru') {
+    // 1. Check the structured titles array (Jikan v4 format)
+    if (anime.titles && Array.isArray(anime.titles)) {
+      var ruEntry = anime.titles.find(function (t) {
+        return t.type === 'Russian' || /[А-Яа-яЁё]/.test(t.title);
+      });
+      if (ruEntry) return ruEntry.title;
+    }
+    // 2. Fallback: scan title_synonyms for any Cyrillic string
+    if (anime.title_synonyms && Array.isArray(anime.title_synonyms)) {
+      var ruSynonym = anime.title_synonyms.find(function (s) {
+        return /[А-Яа-яЁё]/.test(s);
+      });
+      if (ruSynonym) return ruSynonym;
+    }
+  }
+  // Default: English / Romaji title
+  return anime.title || 'Unknown Title';
+}
 
 (function () {
   'use strict';
@@ -74,6 +142,13 @@ let currentOpenAnime  = null; // tracks the anime currently shown in the detail 
     if (img) {
       img.src = anime.images.jpg.large_image_url;
       img.alt = anime.title;
+      img.onerror = function() {
+        this.style.display = 'none';
+        var placeholder = document.createElement('div');
+        placeholder.style.cssText = 'width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#1a1a1e;font-size:0.65rem;color:#9e9a95;text-align:center;padding:4px;';
+        placeholder.textContent = anime.title || 'No Image';
+        this.parentElement.appendChild(placeholder);
+      };
     }
 
     // 2. Title
@@ -106,7 +181,7 @@ let currentOpenAnime  = null; // tracks the anime currently shown in the detail 
     if (!cards.length) return;
 
     try {
-      var response = await fetch(JIKAN_URL);
+      var response = await fetchWithRetry(JIKAN_URL, 3, 500);
       if (!response.ok) throw new Error('Jikan API error: ' + response.status);
 
       var json = await response.json();
@@ -116,6 +191,20 @@ let currentOpenAnime  = null; // tracks the anime currently shown in the detail 
       var count = Math.min(cards.length, animeList.length);
       for (var i = 0; i < count; i++) {
         populateCard(cards[i], animeList[i]);
+      }
+
+      // Store sidebar anime data and make cards clickable
+      sidebarAnimeData = animeList.slice(0, count);
+      for (var i = 0; i < count; i++) {
+        cards[i].style.cursor = 'pointer';
+        (function(anime) {
+          cards[i].onclick = function() {
+            // Ensure this anime exists in currentAnimeData so openDetailPage can find it
+            var exists = currentAnimeData.some(function(a) { return a.mal_id === anime.mal_id; });
+            if (!exists) currentAnimeData.push(anime);
+            openDetailPage(anime.mal_id);
+          };
+        })(animeList[i]);
       }
 
     } catch (err) {
@@ -238,33 +327,7 @@ let currentOpenAnime  = null; // tracks the anime currently shown in the detail 
     }
   }
 
-  /**
-   * Returns the best available title for the current language.
-   * In Russian mode, searches anime.titles[] for a Russian entry or any
-   * string containing Cyrillic characters. Falls back to anime.title.
-   * @param {Object} anime - One Jikan data item
-   * @returns {string} The localised display title
-   */
-  function getLocalizedTitle(anime) {
-    if (currentLang === 'ru') {
-      // 1. Check the structured titles array (Jikan v4 format)
-      if (anime.titles && Array.isArray(anime.titles)) {
-        var ruEntry = anime.titles.find(function (t) {
-          return t.type === 'Russian' || /[А-Яа-яЁё]/.test(t.title);
-        });
-        if (ruEntry) return ruEntry.title;
-      }
-      // 2. Fallback: scan title_synonyms for any Cyrillic string
-      if (anime.title_synonyms && Array.isArray(anime.title_synonyms)) {
-        var ruSynonym = anime.title_synonyms.find(function (s) {
-          return /[А-Яа-яЁё]/.test(s);
-        });
-        if (ruSynonym) return ruSynonym;
-      }
-    }
-    // Default: English / Romaji title
-    return anime.title || 'Unknown Title';
-  }
+
 
   /**
    * Builds the HTML string for one library grid card.
@@ -292,9 +355,11 @@ let currentOpenAnime  = null; // tracks the anime currently shown in the detail 
 
     return `
       <article class="lib-card" id="lib-card-dyn-${index}" role="listitem"
-               data-id="${anime.mal_id}" style="cursor:pointer;">
+               data-id="${anime.mal_id}" style="cursor:pointer;"
+               aria-label="${safeTitle}, score ${score}">
         <div class="lib-card__poster">
-          <img src="${img}" alt="${safeTitle}" loading="lazy" />
+          <img src="${img}" alt="${safeTitle}" loading="lazy"
+            onerror="this.style.display='none';this.parentElement.insertAdjacentHTML('afterbegin','<div style=\'width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#1a1a1e;border:1px solid rgba(232,69,60,0.3);font-size:0.72rem;color:#9e9a95;text-align:center;padding:8px;\'>' + decodeURIComponent('${encodeURIComponent(displayTitle)}') + '</div>')" />
           <div class="lib-card__overlay">
             <p class="lib-card__synopsis">${synopsis}</p>
             <span class="lib-card__view-hint">▶ View Details</span>
@@ -358,6 +423,31 @@ let currentOpenAnime  = null; // tracks the anime currently shown in the detail 
         openDetailPage(card.dataset.id);
       };
     });
+
+    // ARIA: announce result count to screen readers
+    grid.setAttribute('aria-label', 'Anime results, ' + currentAnimeData.length + ' items');
+  }
+
+  /**
+   * Injects `count` skeleton placeholder cards into #library-grid
+   * to show a shimmer animation while data loads.
+   */
+  function renderSkeletons(count) {
+    var grid = document.getElementById('library-grid');
+    if (!grid) return;
+    var html = '';
+    for (var s = 0; s < count; s++) {
+      html += `
+        <article class="lib-card skeleton-card" role="listitem" aria-hidden="true">
+          <div class="lib-card__poster skeleton-box"></div>
+          <div class="lib-card__body">
+            <div class="skeleton-line skeleton-line--title"></div>
+            <div class="skeleton-line skeleton-line--meta"></div>
+            <div class="skeleton-line skeleton-line--badge"></div>
+          </div>
+        </article>`;
+    }
+    grid.innerHTML = html;
   }
 
   /**
@@ -371,7 +461,7 @@ let currentOpenAnime  = null; // tracks the anime currently shown in the detail 
     currentApiUrl = LIBRARY_URL;
 
     try {
-      var response = await fetch(LIBRARY_URL);
+      var response = await fetchWithRetry(LIBRARY_URL, 3, 500);
       if (!response.ok) throw new Error('Jikan error: ' + response.status);
 
       var json = await response.json();
@@ -391,41 +481,30 @@ let currentOpenAnime  = null; // tracks the anime currently shown in the detail 
 
   var searchBar = document.getElementById('search-bar');
 
-  if (searchBar) {
-    searchBar.addEventListener('keypress', async function (e) {
-      if (e.key !== 'Enter') return;
-      e.preventDefault();
+  var debouncedSearch = debounce(async function() {
+    var query = searchBar.value.trim();
+    if (!query) return;
 
-      var query = searchBar.value.trim();
-      if (!query) return;
+    currentPage   = 1;
+    currentApiUrl = SEARCH_URL + encodeURIComponent(query);
+    renderSkeletons(8);
 
-      // Reset pagination state for this new source
-      currentPage   = 1;
-      currentApiUrl = SEARCH_URL + encodeURIComponent(query);
-
+    try {
+      var response = await fetchWithRetry(currentApiUrl, 3, 500);
+      if (!response.ok) throw new Error('Search error: ' + response.status);
+      var json = await response.json();
+      renderGrid(json.data, false);
+    } catch (err) {
+      console.warn('Search failed:', err.message);
       var grid = document.getElementById('library-grid');
-      if (grid) {
-        grid.innerHTML = '<p style="color:var(--text-secondary);padding:2rem;grid-column:1/-1;text-align:center;">Loading…</p>';
-      }
+      if (grid) grid.innerHTML = '<p style="color:var(--text-secondary);padding:2rem;grid-column:1/-1;text-align:center;">Search failed. Please try again.</p>';
+    }
 
-      try {
-        var response = await fetch(currentApiUrl);
-        if (!response.ok) throw new Error('Search error: ' + response.status);
+    var target = document.getElementById('library-grid');
+    if (target) target.scrollIntoView({ behavior: 'smooth' });
+  }, 500);
 
-        var json = await response.json();
-        renderGrid(json.data, false);
-
-      } catch (err) {
-        console.warn('Search failed:', err.message);
-        if (grid) {
-          grid.innerHTML = '<p style="color:var(--text-secondary);padding:2rem;grid-column:1/-1;text-align:center;">Search failed. Please try again.</p>';
-        }
-      }
-
-      var target = document.getElementById('library-grid');
-      if (target) target.scrollIntoView({ behavior: 'smooth' });
-    });
-  }
+  if (searchBar) searchBar.addEventListener('input', debouncedSearch);
 
   /* ----------------------------------------------------------
      CATEGORY TABS — Top Rating & Ongoing
@@ -489,12 +568,10 @@ let currentOpenAnime  = null; // tracks the anime currently shown in the detail 
       currentPage   = 1;
       currentApiUrl = tab.dataset.type === 'ongoing' ? ONGOING_URL : TOP_URL;
 
-      if (grid) {
-        grid.innerHTML = '<p style="color:var(--text-secondary);padding:2rem;grid-column:1/-1;text-align:center;">Loading…</p>';
-      }
+      renderSkeletons(8);
 
       try {
-        var response = await fetch(currentApiUrl);
+        var response = await fetchWithRetry(currentApiUrl, 3, 500);
         if (!response.ok) throw new Error('Tab fetch error: ' + response.status);
         var json = await response.json();
         renderGrid(json.data, false);
@@ -529,7 +606,7 @@ let currentOpenAnime  = null; // tracks the anime currently shown in the detail 
 
       try {
         var url      = currentApiUrl + '&page=' + currentPage;
-        var response = await fetch(url);
+        var response = await fetchWithRetry(url, 3, 500);
         if (!response.ok) throw new Error('Load more error: ' + response.status);
 
         var json = await response.json();
@@ -559,7 +636,7 @@ let currentOpenAnime  = null; // tracks the anime currently shown in the detail 
     var yearValue   = document.getElementById('year-filter').value;
     var formatValue = document.getElementById('format-filter').value;
 
-    var filterUrl = 'https://api.jikan.moe/v4/anime?sfw=true&limit=8&order_by=score&sort=desc';
+    var filterUrl = 'https://api.jikan.moe/v4/anime?sfw=true&limit=8';
 
     if (formatValue) {
       filterUrl += '&type=' + formatValue;
@@ -576,18 +653,24 @@ let currentOpenAnime  = null; // tracks the anime currently shown in the detail 
       }
     }
 
+    var sortValue = document.getElementById('filter-sort').value;
+    if (sortValue === 'rating') {
+      filterUrl += '&order_by=score&sort=desc';
+    } else if (sortValue === 'title') {
+      filterUrl += '&order_by=title&sort=asc';
+    } else if (sortValue === 'newest') {
+      filterUrl += '&order_by=start_date&sort=desc';
+    }
+
     // Reset global pagination state to this new filtered source
     currentPage   = 1;
     currentApiUrl = filterUrl;
 
     // Show loading feedback
-    var grid = document.getElementById('library-grid');
-    if (grid) {
-      grid.innerHTML = '<p style="color:var(--text-secondary);padding:2rem;grid-column:1/-1;text-align:center;">Loading…</p>';
-    }
+    renderSkeletons(8);
 
     try {
-      var response = await fetch(filterUrl);
+      var response = await fetchWithRetry(filterUrl, 3, 500);
       if (!response.ok) throw new Error('Filter error: ' + response.status);
       var json = await response.json();
       renderGrid(json.data, false);
@@ -604,9 +687,10 @@ let currentOpenAnime  = null; // tracks the anime currently shown in the detail 
   }
 
   // Wire up change listeners — grid updates the instant a dropdown changes
-  ['genre-filter', 'year-filter', 'format-filter'].forEach(function (id) {
+  var debouncedApplyFilters = debounce(applyFilters, 400);
+  ['genre-filter', 'year-filter', 'format-filter', 'filter-sort'].forEach(function (id) {
     var el = document.getElementById(id);
-    if (el) el.addEventListener('change', applyFilters);
+    if (el) el.addEventListener('change', debouncedApplyFilters);
   });
 
   /* ----------------------------------------------------------
@@ -700,7 +784,7 @@ let currentOpenAnime  = null; // tracks the anime currently shown in the detail 
     }
   };
 
-  var currentLang = 'en';
+  // currentLang is declared in global scope above the IIFE.
 
   /**
    * Applies the current language to every translatable element on the page.
@@ -837,9 +921,15 @@ let currentOpenAnime  = null; // tracks the anime currently shown in the detail 
   if (langToggleBtn) {
     langToggleBtn.addEventListener('click', function () {
       currentLang = currentLang === 'en' ? 'ru' : 'en';
+      localStorage.setItem('anime_lang', currentLang);
       langToggleBtn.textContent = currentLang === 'en' ? 'EN / RU' : 'RU / EN';
       updateLanguage();
     });
+  }
+
+  // Sync button label to restored language on first load
+  if (langToggleBtn) {
+    langToggleBtn.textContent = currentLang === 'en' ? 'EN / RU' : 'RU / EN';
   }
 
   // Set initial language state on page load
@@ -890,6 +980,12 @@ async function openDetailPage(animeId) {
 
   document.getElementById('detail-synopsis').textContent = anime.synopsis || 'No description available.';
 
+  // Reset tabs — always show Description when opening a new detail page
+  var allTabs = document.querySelectorAll('.tab-headers .tab');
+  allTabs.forEach(function(t) { t.classList.remove('active'); });
+  var descTab = document.querySelector('.tab-headers .tab[data-tab="description"]');
+  if (descTab) descTab.classList.add('active');
+
   // 3. Load Anilibria Player
   var iframe = document.getElementById('detail-video-iframe');
   iframe.src = ''; // clear previous
@@ -900,7 +996,7 @@ async function openDetailPage(animeId) {
       .replace(/\s+/g, ' ')
       .trim();
 
-    var res  = await fetch('https://api.anilibria.tv/v3/title/search?search=' + encodeURIComponent(cleanTitle) + '&limit=1');
+    var res  = await fetch('https://corsproxy.io/?' + encodeURIComponent('https://api.anilibria.tv/v3/title/search?search=' + encodeURIComponent(cleanTitle) + '&limit=1'));
     var data = await res.json();
 
     if (data.list && data.list.length > 0) {
@@ -912,12 +1008,16 @@ async function openDetailPage(animeId) {
     console.error('Anilibria fetch error:', e);
     iframe.src = (anime.trailer && anime.trailer.embed_url) ? anime.trailer.embed_url : '';
   }
+
+  // Activate focus trap after detail page is fully populated
+  activateFocusTrap();
 }
 
 // Attach back button listener — shows the grid again and stops video
 var backToGridBtn = document.getElementById('back-to-grid');
 if (backToGridBtn) {
   backToGridBtn.addEventListener('click', function () {
+    deactivateFocusTrap();
     document.getElementById('detail-view').classList.add('hidden');
     document.getElementById('main-grid-view').classList.remove('hidden');
     var libSection = document.getElementById('library-section');
@@ -926,6 +1026,80 @@ if (backToGridBtn) {
     // Close dropdown if open when navigating away
     var dd = document.getElementById('library-dropdown');
     if (dd) dd.classList.add('hidden');
+  });
+}
+
+/* ----------------------------------------------------------
+   DETAIL TABS — DESCRIPTION / CHARACTERS
+---------------------------------------------------------- */
+
+document.querySelectorAll('.tab-headers .tab').forEach(function(tab) {
+  tab.addEventListener('click', async function() {
+    // Toggle active class
+    document.querySelectorAll('.tab-headers .tab').forEach(function(t) {
+      t.classList.remove('active');
+    });
+    tab.classList.add('active');
+
+    var synopsisEl = document.getElementById('detail-synopsis');
+    if (!synopsisEl || !currentOpenAnime) return;
+
+    var tabType = tab.getAttribute('data-tab');
+
+    if (tabType === 'description') {
+      synopsisEl.textContent = currentOpenAnime.synopsis || 'No description available.';
+    } else if (tabType === 'characters') {
+      synopsisEl.textContent = 'Loading characters\u2026';
+
+      try {
+        var res = await fetch('https://api.jikan.moe/v4/anime/' + currentOpenAnime.mal_id + '/characters');
+        var json = await res.json();
+
+        if (!json.data || json.data.length === 0) {
+          synopsisEl.textContent = 'No character data available.';
+          return;
+        }
+
+        var chars = json.data.slice(0, 12);
+        var html = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(80px,1fr));gap:10px;padding-top:8px;">';
+        chars.forEach(function(entry) {
+          var ch = entry.character;
+          var imgUrl = (ch.images && ch.images.jpg && ch.images.jpg.image_url) ? ch.images.jpg.image_url : '';
+          var name = ch.name || 'Unknown';
+          html += '<div style="text-align:center;">';
+          html += '<img src="' + imgUrl + '" style="width:60px;height:60px;border-radius:50%;object-fit:cover;border:1px solid #ff4a4a;" />';
+          html += '<p style="font-size:0.65rem;color:#ccc;margin-top:4px;">' + name + '</p>';
+          html += '</div>';
+        });
+        html += '</div>';
+        synopsisEl.innerHTML = html;
+
+      } catch (err) {
+        console.warn('Characters fetch failed:', err.message);
+        synopsisEl.textContent = 'No character data available.';
+      }
+    }
+  });
+});
+
+/* ----------------------------------------------------------
+   GRID / LIST VIEW TOGGLE
+---------------------------------------------------------- */
+
+var btnGridView = document.getElementById('btn-grid-view');
+var btnListView = document.getElementById('btn-list-view');
+var libGrid     = document.getElementById('library-grid');
+
+if (btnGridView && btnListView && libGrid) {
+  btnGridView.addEventListener('click', function() {
+    libGrid.classList.remove('lib-grid--list');
+    btnGridView.classList.add('lib-view-btn--active');
+    btnListView.classList.remove('lib-view-btn--active');
+  });
+  btnListView.addEventListener('click', function() {
+    libGrid.classList.add('lib-grid--list');
+    btnListView.classList.add('lib-view-btn--active');
+    btnGridView.classList.remove('lib-view-btn--active');
   });
 }
 
@@ -993,3 +1167,109 @@ document.querySelectorAll('.dropdown-item').forEach(function (btn) {
     document.getElementById('library-dropdown').classList.add('hidden');
   });
 });
+
+/* ----------------------------------------------------------
+   LOGIN MODAL
+---------------------------------------------------------- */
+var loginModal  = document.getElementById('login-modal');
+var btnLogin    = document.getElementById('btn-login');
+var modalClose  = document.getElementById('modal-close');
+var modalSubmit = document.getElementById('modal-submit');
+var modalStatus = document.getElementById('modal-status');
+
+function openLoginModal() {
+  if (loginModal) loginModal.classList.remove('hidden');
+}
+function closeLoginModal() {
+  if (loginModal) loginModal.classList.add('hidden');
+  if (modalStatus) modalStatus.textContent = '';
+}
+
+if (btnLogin)   btnLogin.addEventListener('click', openLoginModal);
+if (modalClose) modalClose.addEventListener('click', closeLoginModal);
+
+// Close on overlay click
+if (loginModal) {
+  loginModal.addEventListener('click', function(e) {
+    if (e.target === loginModal) closeLoginModal();
+  });
+}
+
+// Close on Escape key — also closes detail view
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    closeLoginModal();
+    // Also close detail view if open
+    var detailView = document.getElementById('detail-view');
+    if (detailView && !detailView.classList.contains('hidden')) {
+      document.getElementById('back-to-grid').click();
+    }
+  }
+});
+
+// Submit — localStorage-based fake auth
+if (modalSubmit) {
+  modalSubmit.addEventListener('click', function() {
+    var username = document.getElementById('modal-username').value.trim();
+    var password = document.getElementById('modal-password').value;
+    if (!username || !password) {
+      modalStatus.textContent = 'Please fill in both fields.';
+      return;
+    }
+    // Save to localStorage as "logged in"
+    localStorage.setItem('anime_user', JSON.stringify({ username: username }));
+    modalStatus.textContent = 'Welcome, ' + username + '!';
+    // Update the Login button label
+    if (btnLogin) btnLogin.textContent = username;
+    setTimeout(closeLoginModal, 1200);
+  });
+}
+
+// On page load: restore logged-in state if user already signed in
+var savedUser = JSON.parse(localStorage.getItem('anime_user'));
+if (savedUser && savedUser.username && btnLogin) {
+  btnLogin.textContent = savedUser.username;
+}
+
+/* ----------------------------------------------------------
+   FOCUS TRAP — detail view
+---------------------------------------------------------- */
+var focusTrapActive = false;
+
+function getFocusableElements(container) {
+  return Array.from(container.querySelectorAll(
+    'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+  )).filter(function(el) { return !el.hasAttribute('disabled') && !el.closest('.hidden'); });
+}
+
+function activateFocusTrap() {
+  focusTrapActive = true;
+  var detailView = document.getElementById('detail-view');
+  var focusable  = getFocusableElements(detailView);
+  if (focusable.length) focusable[0].focus();
+
+  detailView.addEventListener('keydown', trapKeydown);
+}
+
+function deactivateFocusTrap() {
+  focusTrapActive = false;
+  var detailView = document.getElementById('detail-view');
+  detailView.removeEventListener('keydown', trapKeydown);
+}
+
+function trapKeydown(e) {
+  var detailView = document.getElementById('detail-view');
+  var focusable  = getFocusableElements(detailView);
+  if (!focusable.length) return;
+
+  var first = focusable[0];
+  var last  = focusable[focusable.length - 1];
+
+  if (e.key === 'Tab') {
+    if (e.shiftKey) {
+      if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+    } else {
+      if (document.activeElement === last)  { e.preventDefault(); first.focus(); }
+    }
+  }
+}

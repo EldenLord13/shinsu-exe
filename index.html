@@ -187,8 +187,8 @@
       <!-- Left Side: Episode / Info Area -->
       <div class="detail-sidebar neon-box">
         <div class="tab-headers">
-          <span class="tab active">DESCRIPTION</span>
-          <span class="tab">CHARACTERS</span>
+          <span class="tab active" data-tab="description">DESCRIPTION</span>
+          <span class="tab" data-tab="characters">CHARACTERS</span>
         </div>
         <div class="tab-content" id="detail-synopsis">
           Loading synopsis...
@@ -281,7 +281,7 @@
 
     <!-- Anime Grid + Pagination -->
     <div class="lib-section-body" id="lib-section-body">
-      <div class="lib-grid" id="library-grid" role="list">
+      <div class="lib-grid" id="library-grid" role="list" aria-live="polite">
 
         <!-- Card 1 — Spectral Pulse -->
         <article class="lib-card" id="lc-1" role="listitem">
@@ -484,6 +484,22 @@
   <script src="app.js"></script>
 
 
+
+
+  <!-- ===================== LOGIN MODAL ===================== -->
+  <div id="login-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-box neon-box">
+      <button class="modal-close" id="modal-close" aria-label="Close">✕</button>
+      <h2 class="modal-title" id="modal-title">LOGIN</h2>
+      <p class="modal-subtitle">Sign in to sync your library</p>
+      <div class="modal-form">
+        <input type="text" id="modal-username" class="modal-input" placeholder="Username" autocomplete="off" />
+        <input type="password" id="modal-password" class="modal-input" placeholder="Password" />
+        <button class="neon-btn-large modal-submit" id="modal-submit">ENTER</button>
+        <p class="modal-status" id="modal-status"></p>
+      </div>
+    </div>
+  </div>
 
 </body>
 
